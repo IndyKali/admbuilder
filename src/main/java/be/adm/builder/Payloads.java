@@ -54,4 +54,25 @@ public final class Payloads {
 			return TYPE;
 		}
 	}
+
+	/** Client -> serveur : "le joueur a clique gauche sur ce bloc avec la hache" (coin 1). */
+	public record Coin1(int x, int y, int z) implements CustomPacketPayload {
+		public static final Type<Coin1> TYPE = new Type<>(Identifier.fromNamespaceAndPath("admbuilder", "coin1"));
+		public static final StreamCodec<FriendlyByteBuf, Coin1> CODEC = StreamCodec.ofMember(Coin1::write, Coin1::read);
+
+		private static Coin1 read(FriendlyByteBuf buf) {
+			return new Coin1(buf.readInt(), buf.readInt(), buf.readInt());
+		}
+
+		private void write(FriendlyByteBuf buf) {
+			buf.writeInt(x);
+			buf.writeInt(y);
+			buf.writeInt(z);
+		}
+
+		@Override
+		public Type<? extends CustomPacketPayload> type() {
+			return TYPE;
+		}
+	}
 }

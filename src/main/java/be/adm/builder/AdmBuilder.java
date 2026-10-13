@@ -106,15 +106,12 @@ public class AdmBuilder implements ModInitializer {
 	public void onInitialize() {
 		// 1) La baguette : hache en bois. Clic gauche = coin 1, clic droit = coin 2.
 		AttackBlockCallback.EVENT.register((player, level, hand, pos, direction) -> {
-			if (!estBaguette(player, hand)) {
+			if (!estBaguette(player, hand) || !(player instanceof ServerPlayer sp)) {
 				return InteractionResult.PASS;
 			}
 
-			if (player instanceof ServerPlayer sp) {
-				Selection.setFirst(sp.getUUID(), pos.immutable());
-				sp.sendSystemMessage(Component.literal("Coin 1 : " + coord(pos)));
-			}
-
+			Selection.setFirst(sp.getUUID(), pos.immutable());
+			sp.sendSystemMessage(Component.literal("Coin 1 : " + coord(pos)));
 			return InteractionResult.FAIL;
 		});
 
@@ -135,6 +132,16 @@ public class AdmBuilder implements ModInitializer {
 		// Messages entre l'apercu fantome (client) et le collage (monde).
 		PayloadTypeRegistry.clientboundPlay().register(Payloads.Preview.TYPE, Payloads.Preview.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(Payloads.Confirm.TYPE, Payloads.Confirm.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(Payloads.Coin1.TYPE, Payloads.Coin1.CODEC);
+		ServerPlayNetworking.registerGlobalReceiver(Payloads.Coin1.TYPE, (payload, context) -> context.server().execute(() -> {
+			ServerPlayer sp = context.player();
+
+			if (sp.getMainHandItem().is(Items.WOODEN_AXE)) {
+				BlockPos pos = new BlockPos(payload.x(), payload.y(), payload.z());
+				Selection.setFirst(sp.getUUID(), pos);
+				sp.sendSystemMessage(Component.literal("Coin 1 : " + coord(pos)));
+			}
+		}));
 		ServerPlayNetworking.registerGlobalReceiver(Payloads.Confirm.TYPE, (payload, context) -> context.server().execute(() -> placer(context.player(), payload)));
 
 		// 2) Les blocs incassables.

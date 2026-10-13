@@ -12,6 +12,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -21,6 +24,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 
@@ -106,6 +110,16 @@ public class AdmBuilderClient implements ClientModInitializer {
 				ClientPlayNetworking.send(new Payloads.Confirm(nom, coin.getX(), coin.getY(), coin.getZ(), quarts));
 				actif = false;
 			}
+		});
+
+		// Clic gauche avec la hache : on previent le monde (coin 1) et on n'abime pas le bloc.
+		AttackBlockCallback.EVENT.register((player, level, hand, pos, direction) -> {
+			if (level.isClientSide() && hand == InteractionHand.MAIN_HAND && player.getItemInHand(hand).is(Items.WOODEN_AXE)) {
+				ClientPlayNetworking.send(new Payloads.Coin1(pos.getX(), pos.getY(), pos.getZ()));
+				return InteractionResult.FAIL;
+			}
+
+			return InteractionResult.PASS;
 		});
 
 		LevelRenderEvents.BEFORE_TRANSLUCENT_TERRAIN.register(AdmBuilderClient::dessiner);
