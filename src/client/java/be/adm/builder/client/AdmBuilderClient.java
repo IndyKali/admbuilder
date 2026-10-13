@@ -60,7 +60,7 @@ public class AdmBuilderClient implements ClientModInitializer {
 			quarts = 0;
 			coin = null;
 			actif = true;
-			context.client().gui.setOverlayMessage(Component.literal("Vise un endroit - R : tourner - Entree : coller - Retour arriere : annuler"), false);
+			context.client().gui.hud.setOverlayMessage(Component.literal("Vise un endroit - R : tourner - Entree : coller - Retour arriere : annuler"), false);
 		}));
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -86,7 +86,7 @@ public class AdmBuilderClient implements ClientModInitializer {
 
 			if (annule) {
 				actif = false;
-				client.gui.setOverlayMessage(Component.literal("Collage annule."), false);
+				client.gui.hud.setOverlayMessage(Component.literal("Collage annule."), false);
 				return;
 			}
 
