@@ -1,5 +1,6 @@
 package be.adm.builder;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -7,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
+import java.util.zip.GZIPOutputStream;
 
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.word;
@@ -40,6 +42,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
@@ -168,14 +171,11 @@ public class AdmBuilder implements ModInitializer {
 		CommandSourceStack src = ctx.getSource();
 		src.sendSuccess(() -> Component.literal(
 				"--- ADM Builder ---\n"
-						+ "1. Prends une HACHE EN BOIS. Clic gauche sur un bloc = coin 1, clic droit sur un bloc = coin 2.\n"
-						+ "2. /adm copier <nom>  : sauvegarde le batiment choisi\n"
-						+ "3. Va dans une autre map, puis /adm coller <nom> : un fantome bleu apparait.\n"
-						+ "   Vise un endroit, R = tourner, Entree = coller pour de bon, Retour arriere = annuler\n"
-						+ "4. /adm incassable : les blocs choisis ne peuvent plus etre casses\n"
-						+ "   /adm cassable : enleve la protection\n"
-						+ "5. /adm objet : l'objet dans ta main devient incassable (re-tape pour annuler)\n"
-						+ "/adm liste : voir les batiments sauvegardes"), false);
+						+ "COPIER (hache en bois) : clic gauche = coin 1 (point de reference), clic droit = coin 2, puis /adm copier <nom>\n"
+						+ "COLLER (epee en bois) : le fantome bleu apparait, vise un endroit = le coin 1 se pose la.\n"
+						+ "   R = tourner - clic droit (ou Entree) = coller - clic gauche (ou X) = effacer le fantome\n"
+						+ "   /adm coller <nom> = choisir un autre batiment sauvegarde, /adm liste = les voir\n"
+						+ "BLOQUER : /adm incassable (zone choisie), /adm cassable (enleve), /adm objet (objet en main)"), false);
 		return 1;
 	}
 
@@ -211,14 +211,98 @@ public class AdmBuilder implements ModInitializer {
 			template.fillFromWorld(src.getLevel(), min, size, true, List.of());
 			CompoundTag tag = template.save(new CompoundTag());
 			NbtIo.writeCompressed(tag, dossier().resolve(nom + ".nbt"));
+			BlockPos coin1 = Selection.get(player.getUUID())[0];
+			ecrireApercu(src.getLevel(), min, size, nom, coin1.getX() - min.getX(), coin1.getY() - min.getY(), coin1.getZ() - min.getZ());
+			ServerPlayNetworking.send(player, new Payloads.Preview(nom, size.getX(), size.getY(), size.getZ()));
 		} catch (IOException e) {
 			LOGGER.error("Erreur a la sauvegarde", e);
 			src.sendFailure(Component.literal("Erreur pendant la sauvegarde : " + e.getMessage()));
 			return 0;
 		}
 
-		src.sendSuccess(() -> Component.literal("Batiment '" + nom + "' sauvegarde (" + size.getX() + "x" + size.getY() + "x" + size.getZ() + "). Tu peux le coller dans n'importe quelle map avec /adm coller " + nom), false);
+		src.sendSuccess(() -> Component.literal("Batiment '" + nom + "' sauvegarde (" + size.getX() + "x" + size.getY() + "x" + size.getZ() + "). Prends l'epee en bois pour voir le fantome. Dans une autre map : /adm coller " + nom), false);
 		return 1;
+	}
+
+	/** Fichier "apercu" : la liste des blocs visibles du batiment avec leur couleur, pour le fantome. */
+	private static void ecrireApercu(ServerLevel level, BlockPos min, Vec3i size, String nom, int refX, int refY, int refZ) throws IOException {
+		int sx = size.getX();
+		int sy = size.getY();
+		int sz = size.getZ();
+		boolean[] plein = new boolean[sx * sy * sz];
+		int[] couleur = new int[sx * sy * sz];
+		BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
+
+		for (int x = 0; x < sx; x++) {
+			for (int y = 0; y < sy; y++) {
+				for (int z = 0; z < sz; z++) {
+					p.set(min.getX() + x, min.getY() + y, min.getZ() + z);
+					BlockState etat = level.getBlockState(p);
+
+					if (!etat.isAir()) {
+						int i = (x * sy + y) * sz + z;
+						int col = etat.getMapColor(level, p).col;
+						plein[i] = true;
+						couleur[i] = col == 0 ? 0xA0A0A0 : col;
+					}
+				}
+			}
+		}
+
+		// On ne garde que les blocs qui touchent l'air (la surface), c'est plus leger.
+		int[][] voisins = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+		int total = 0;
+		boolean[] surface = new boolean[plein.length];
+
+		for (int x = 0; x < sx; x++) {
+			for (int y = 0; y < sy; y++) {
+				for (int z = 0; z < sz; z++) {
+					int i = (x * sy + y) * sz + z;
+
+					if (!plein[i]) {
+						continue;
+					}
+
+					for (int[] v : voisins) {
+						int nx = x + v[0];
+						int ny = y + v[1];
+						int nz = z + v[2];
+
+						if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz || !plein[(nx * sy + ny) * sz + nz]) {
+							surface[i] = true;
+							total++;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		try (DataOutputStream out = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(dossier().resolve(nom + ".apercu"))))) {
+			out.writeInt(-2); // marqueur de version du fichier
+			out.writeInt(sx);
+			out.writeInt(sy);
+			out.writeInt(sz);
+			out.writeInt(refX);
+			out.writeInt(refY);
+			out.writeInt(refZ);
+			out.writeInt(total);
+
+			for (int x = 0; x < sx; x++) {
+				for (int y = 0; y < sy; y++) {
+					for (int z = 0; z < sz; z++) {
+						int i = (x * sy + y) * sz + z;
+
+						if (surface[i]) {
+							out.writeInt(x);
+							out.writeInt(y);
+							out.writeInt(z);
+							out.writeInt(couleur[i]);
+						}
+					}
+				}
+			}
+		}
 	}
 
 	private static StructureTemplate charger(ServerLevel level, String nom) throws IOException {
