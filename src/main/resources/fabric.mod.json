@@ -1,0 +1,20 @@
+{
+	"schemaVersion": 1,
+	"id": "admbuilder",
+	"version": "${version}",
+	"name": "ADM Builder",
+	"description": "Copie un batiment d'une map et colle-le dans une autre. Rend des blocs et des objets incassables.",
+	"authors": ["ADM"],
+	"license": "CC0-1.0",
+	"icon": "assets/admbuilder/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["be.adm.builder.AdmBuilder"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

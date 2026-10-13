@@ -1,0 +1,5 @@
+ADM Builder - mod Fabric pour Minecraft 26.2
+
+Commandes en jeu : /adm aide
+Hache en bois : clic gauche = coin 1, clic droit = coin 2.
+Les batiments sauvegardes sont dans .minecraft/adm_batiments (communs a toutes les maps).
