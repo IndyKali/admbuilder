@@ -12,10 +12,12 @@ repositories {
 }
 
 loom {
+	splitEnvironmentSourceSets()
 
 	mods {
 		"admbuilder" {
 			sourceSet sourceSets.main
+			sourceSet sourceSets.client
 		}
 	}
 }

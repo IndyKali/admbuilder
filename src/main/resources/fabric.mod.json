@@ -9,7 +9,8 @@
 	"icon": "assets/admbuilder/icon.png",
 	"environment": "*",
 	"entrypoints": {
-		"main": ["be.adm.builder.AdmBuilder"]
+		"main": ["be.adm.builder.AdmBuilder"],
+		"client": ["be.adm.builder.client.AdmBuilderClient"]
 	},
 	"depends": {
 		"fabricloader": ">=0.19.5",

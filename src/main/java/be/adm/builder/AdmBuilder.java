@@ -8,8 +8,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
 
-import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
-import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.word;
 import static net.minecraft.commands.Commands.argument;
@@ -49,6 +47,8 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemp
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
@@ -132,6 +132,11 @@ public class AdmBuilder implements ModInitializer {
 			return InteractionResult.SUCCESS;
 		});
 
+		// Messages entre l'apercu fantome (client) et le collage (monde).
+		PayloadTypeRegistry.clientboundPlay().register(Payloads.Preview.TYPE, Payloads.Preview.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(Payloads.Confirm.TYPE, Payloads.Confirm.CODEC);
+		ServerPlayNetworking.registerGlobalReceiver(Payloads.Confirm.TYPE, (payload, context) -> context.server().execute(() -> placer(context.player(), payload)));
+
 		// 2) Les blocs incassables.
 		ServerLifecycleEvents.SERVER_STARTED.register(Protection::load);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> Protection.save());
@@ -146,9 +151,7 @@ public class AdmBuilder implements ModInitializer {
 						.then(literal("aide").executes(this::aide))
 						.then(literal("liste").executes(this::liste))
 						.then(literal("copier").then(argument("nom", word()).executes(this::copier)))
-						.then(literal("coller").then(argument("nom", word()).suggests(suggestions)
-								.executes(ctx -> coller(ctx, 0))
-								.then(argument("rotation", integer(0, 270)).executes(ctx -> coller(ctx, getInteger(ctx, "rotation"))))))
+						.then(literal("coller").then(argument("nom", word()).suggests(suggestions).executes(this::apercu)))
 						.then(literal("incassable").executes(ctx -> zone(ctx, true)))
 						.then(literal("cassable").executes(ctx -> zone(ctx, false)))
 						.then(literal("objet").executes(this::objet))));
@@ -160,7 +163,8 @@ public class AdmBuilder implements ModInitializer {
 				"--- ADM Builder ---\n"
 						+ "1. Prends une HACHE EN BOIS. Clic gauche sur un bloc = coin 1, clic droit sur un bloc = coin 2.\n"
 						+ "2. /adm copier <nom>  : sauvegarde le batiment choisi\n"
-						+ "3. Va dans une autre map, puis /adm coller <nom>  (ou /adm coller <nom> 90 pour tourner)\n"
+						+ "3. Va dans une autre map, puis /adm coller <nom> : un fantome bleu apparait.\n"
+						+ "   Vise un endroit, R = tourner, Entree = coller pour de bon, Retour arriere = annuler\n"
 						+ "4. /adm incassable : les blocs choisis ne peuvent plus etre casses\n"
 						+ "   /adm cassable : enleve la protection\n"
 						+ "5. /adm objet : l'objet dans ta main devient incassable (re-tape pour annuler)\n"
@@ -210,46 +214,69 @@ public class AdmBuilder implements ModInitializer {
 		return 1;
 	}
 
-	private int coller(CommandContext<CommandSourceStack> ctx, int degres) throws CommandSyntaxException {
+	private static StructureTemplate charger(ServerLevel level, String nom) throws IOException {
+		Path path = dossier().resolve(nom + ".nbt");
+		CompoundTag tag = NbtIo.readCompressed(path, NbtAccounter.unlimitedHeap());
+		StructureTemplate template = new StructureTemplate();
+		template.load(level.registryAccess().lookupOrThrow(Registries.BLOCK), tag);
+		return template;
+	}
+
+	/** /adm coller nom : affiche le fantome chez le joueur (la suite se passe avec les touches). */
+	private int apercu(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
 		CommandSourceStack src = ctx.getSource();
 		ServerPlayer player = src.getPlayerOrException();
 		String nom = getString(ctx, "nom");
-		Path path = dossier().resolve(nom + ".nbt");
 
-		if (!Files.exists(path)) {
+		if (!Files.exists(dossier().resolve(nom + ".nbt"))) {
 			src.sendFailure(Component.literal("Je ne trouve pas le batiment '" + nom + "'. Tape /adm liste pour voir les noms."));
 			return 0;
 		}
 
-		Rotation rotation = switch (degres) {
-			case 90 -> Rotation.CLOCKWISE_90;
-			case 180 -> Rotation.CLOCKWISE_180;
-			case 270 -> Rotation.COUNTERCLOCKWISE_90;
+		try {
+			Vec3i size = charger(src.getLevel(), nom).getSize();
+			ServerPlayNetworking.send(player, new Payloads.Preview(nom, size.getX(), size.getY(), size.getZ()));
+		} catch (IOException e) {
+			LOGGER.error("Erreur a la lecture", e);
+			src.sendFailure(Component.literal("Erreur pendant la lecture : " + e.getMessage()));
+			return 0;
+		}
+
+		return 1;
+	}
+
+	/** Le joueur a appuye sur Entree : on colle pour de bon. */
+	private static void placer(ServerPlayer player, Payloads.Confirm c) {
+		if (!c.nom().matches("[A-Za-z0-9_.+-]+") || !Files.exists(dossier().resolve(c.nom() + ".nbt"))) {
+			return;
+		}
+
+		Rotation rotation = switch (Math.floorMod(c.quarts(), 4)) {
+			case 1 -> Rotation.CLOCKWISE_90;
+			case 2 -> Rotation.CLOCKWISE_180;
+			case 3 -> Rotation.COUNTERCLOCKWISE_90;
 			default -> Rotation.NONE;
 		};
 
 		try {
-			ServerLevel level = src.getLevel();
-			CompoundTag tag = NbtIo.readCompressed(path, NbtAccounter.unlimitedHeap());
-			StructureTemplate template = new StructureTemplate();
-			template.load(level.registryAccess().lookupOrThrow(Registries.BLOCK), tag);
-
+			ServerLevel level = (ServerLevel) player.level();
+			StructureTemplate template = charger(level, c.nom());
 			StructurePlaceSettings settings = new StructurePlaceSettings().setRotation(rotation).setMirror(Mirror.NONE);
-			BlockPos at = player.blockPosition();
+
+			// On decale pour que le coin le plus bas du batiment tombe exactement la ou etait le fantome.
+			BoundingBox base = template.getBoundingBox(settings, BlockPos.ZERO);
+			BlockPos at = new BlockPos(c.x() - base.minX(), c.y() - base.minY(), c.z() - base.minZ());
 			template.placeInWorld(level, at, at, settings, level.getRandom(), 2);
 
 			// Le batiment colle devient la selection : /adm incassable le verrouille directement.
 			BoundingBox box = template.getBoundingBox(settings, at);
 			Selection.setFirst(player.getUUID(), new BlockPos(box.minX(), box.minY(), box.minZ()));
 			Selection.setSecond(player.getUUID(), new BlockPos(box.maxX(), box.maxY(), box.maxZ()));
+			player.sendSystemMessage(Component.literal("Batiment '" + c.nom() + "' colle ! Tape /adm incassable pour le rendre incassable."));
 		} catch (IOException e) {
 			LOGGER.error("Erreur au collage", e);
-			src.sendFailure(Component.literal("Erreur pendant le collage : " + e.getMessage()));
-			return 0;
+			player.sendSystemMessage(Component.literal("Erreur pendant le collage : " + e.getMessage()));
 		}
-
-		src.sendSuccess(() -> Component.literal("Batiment '" + nom + "' colle ! Tape /adm incassable pour le rendre incassable."), false);
-		return 1;
 	}
 
 	private int zone(CommandContext<CommandSourceStack> ctx, boolean incassable) throws CommandSyntaxException {
