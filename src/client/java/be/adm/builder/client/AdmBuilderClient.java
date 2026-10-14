@@ -51,39 +51,13 @@ public class AdmBuilderClient implements ClientModInitializer {
 	private static int sy;
 	private static int sz;
 	private static int quarts = 0;
-	private static BlockPos coin = null; // coin le plus bas du fantome (= le bloc vise), null si tu ne vises rien
+	private static BlockPos cible = null; // le bloc ou se posera le coin 1 (= ce que tu vises), null si tu ne vises rien
 
 	// Les blocs du fantome (positions dans le batiment d'origine + couleur). null = on dessine juste une boite.
 	private static int[] bx;
 	private static int[] by;
 	private static int[] bz;
 	private static int[] bc;
-
-	private static int largeur() {
-		return quarts % 2 == 0 ? sx : sz;
-	}
-
-	private static int profondeur() {
-		return quarts % 2 == 0 ? sz : sx;
-	}
-
-	private static int tourneX(int x, int z) {
-		return switch (quarts) {
-			case 1 -> (sz - 1) - z;
-			case 2 -> (sx - 1) - x;
-			case 3 -> z;
-			default -> x;
-		};
-	}
-
-	private static int tourneZ(int x, int z) {
-		return switch (quarts) {
-			case 1 -> x;
-			case 2 -> (sz - 1) - z;
-			case 3 -> (sx - 1) - x;
-			default -> z;
-		};
-	}
 
 	private static void chargerApercu(String nomBatiment) {
 		refX = 0;
@@ -157,10 +131,10 @@ public class AdmBuilderClient implements ClientModInitializer {
 			sy = payload.sy();
 			sz = payload.sz();
 			quarts = 0;
-			coin = null;
+			cible = null;
 			chargerApercu(nom);
 			arme = true;
-			context.client().gui.hud.setOverlayMessage(Component.literal("Prends l'epee en bois : vise un endroit, R = tourner, clic droit = coller, clic gauche = effacer"), false);
+			context.client().gui.hud.setOverlayMessage(Component.literal("Prends l'epee en bois : vise un endroit, R = tourner de 45 degres, clic droit = coller, clic gauche = effacer"), false);
 		}));
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -198,12 +172,12 @@ public class AdmBuilderClient implements ClientModInitializer {
 			}
 
 			if (!epee) {
-				coin = null;
+				cible = null;
 				return;
 			}
 
 			if (tourne) {
-				quarts = (quarts + 1) % 4;
+				quarts = (quarts + 1) % 8; // un pas = 45 degres
 			}
 
 			cibler(client);
@@ -248,28 +222,27 @@ public class AdmBuilderClient implements ClientModInitializer {
 
 	private static void effacer(Minecraft client) {
 		arme = false;
-		coin = null;
+		cible = null;
 		client.gui.hud.setOverlayMessage(Component.literal("Fantome efface."), false);
 	}
 
 	/** Le bloc vise (au-dessus de la face visee) est l'endroit ou se pose le coin 1 du batiment. */
 	private static void cibler(Minecraft client) {
 		if (client.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) {
-			BlockPos cible = hit.getBlockPos().relative(hit.getDirection());
-			coin = new BlockPos(cible.getX() - tourneX(refX, refZ), cible.getY() - refY, cible.getZ() - tourneZ(refX, refZ));
+			cible = hit.getBlockPos().relative(hit.getDirection());
 		} else {
-			coin = null;
+			cible = null;
 		}
 	}
 
 	private static void coller() {
-		if (arme && epee && coin != null) {
-			ClientPlayNetworking.send(new Payloads.Confirm(nom, coin.getX(), coin.getY(), coin.getZ(), quarts));
+		if (arme && epee && cible != null) {
+			ClientPlayNetworking.send(new Payloads.Confirm(nom, cible.getX(), cible.getY(), cible.getZ(), quarts));
 		}
 	}
 
 	private static void dessiner(LevelRenderContext context) {
-		if (!arme || !epee || coin == null) {
+		if (!arme || !epee || cible == null) {
 			return;
 		}
 
@@ -278,80 +251,86 @@ public class AdmBuilderClient implements ClientModInitializer {
 		pose.pushPose();
 		pose.translate(-camera.x, -camera.y, -camera.z);
 
-		final int cx = coin.getX();
-		final int cy = coin.getY();
-		final int cz = coin.getZ();
-		final int l = largeur();
-		final int p = profondeur();
+		// Le coin 1 se pose sur le centre du bloc vise ; tout le fantome tourne autour de ce point.
+		final float px = cible.getX() + 0.5f;
+		final float pz = cible.getZ() + 0.5f;
+		final float py = cible.getY();
+		final float cos = (float) Math.cos(quarts * Math.PI / 4.0);
+		final float sin = (float) Math.sin(quarts * Math.PI / 4.0);
 
 		context.submitNodeCollector().submitCustomGeometry(pose, RenderTypes.debugFilledBox(), (pp, buffer) -> {
-			if (bx == null) {
-				// Pas de fichier apercu (batiment copie avec l'ancienne version) : une boite bleue.
-				boite(pp, buffer, cx, cy, cz, cx + l, cy + sy, cz + p, ARGB.colorFromFloat(0.4f, 0.2f, 0.7f, 1.0f));
-				return;
+			float gauche = -refX - 0.5f;
+			float haut = -refZ - 0.5f;
+			float droite = sx - refX - 0.5f;
+			float bas = sz - refZ - 0.5f;
+			float y0 = py - refY;
+
+			// Un contour tres leger pour voir la taille totale, et une dalle cyan pour voir le sol.
+			boite(pp, buffer, px, pz, cos, sin, gauche, haut, droite, bas, y0, y0 + sy, ARGB.colorFromFloat(bx == null ? 0.4f : 0.18f, 0.2f, 0.7f, 1.0f));
+			boite(pp, buffer, px, pz, cos, sin, gauche, haut, droite, bas, y0, y0 + 0.12f, ARGB.colorFromFloat(0.60f, 0.0f, 0.9f, 1.0f));
+
+			if (bx != null) {
+				for (int i = 0; i < bx.length; i++) {
+					int rgb = bc[i];
+					// Bleu fantome : la couleur du bloc d'origine ne sert qu'a garder un peu de relief.
+					float lum = (0.299f * ((rgb >> 16) & 255) + 0.587f * ((rgb >> 8) & 255) + 0.114f * (rgb & 255)) / 255f;
+					int couleur = ARGB.colorFromFloat(0.80f, 0.15f + 0.25f * lum, 0.55f + 0.35f * lum, 1.0f);
+					float dx = bx[i] - refX;
+					float dz = bz[i] - refZ;
+					float oy = py + (by[i] - refY);
+					boite(pp, buffer, px, pz, cos, sin, dx - 0.49f, dz - 0.49f, dx + 0.49f, dz + 0.49f, oy + 0.01f, oy + 0.99f, couleur);
+				}
 			}
 
-			// Un contour tres leger pour voir la taille totale.
-			boite(pp, buffer, cx, cy, cz, cx + l, cy + sy, cz + p, ARGB.colorFromFloat(0.18f, 0.2f, 0.7f, 1.0f));
-
-			// Le sol du batiment : une dalle cyan bien visible pour voir l'emplacement exact.
-			boite(pp, buffer, cx, cy, cz, cx + l, cy + 0.12f, cz + p, ARGB.colorFromFloat(0.60f, 0.0f, 0.9f, 1.0f));
-
-			for (int i = 0; i < bx.length; i++) {
-				int x = bx[i];
-				int z = bz[i];
-				int rgb = bc[i];
-				// Bleu fantome : la couleur du bloc d'origine ne sert qu'a garder un peu de relief.
-				float lum = (0.299f * ((rgb >> 16) & 255) + 0.587f * ((rgb >> 8) & 255) + 0.114f * (rgb & 255)) / 255f;
-				int couleur = ARGB.colorFromFloat(0.80f, 0.15f + 0.25f * lum, 0.55f + 0.35f * lum, 1.0f);
-				float ox = cx + tourneX(x, z);
-				float oy = cy + by[i];
-				float oz = cz + tourneZ(x, z);
-				boite(pp, buffer, ox + 0.01f, oy + 0.01f, oz + 0.01f, ox + 0.99f, oy + 0.99f, oz + 0.99f, couleur);
-			}
-
-			// Le coin 1 (point de reference) en jaune, pour voir ou le batiment sera pose.
-			float jx = cx + tourneX(refX, refZ);
-			float jy = cy + refY;
-			float jz = cz + tourneZ(refX, refZ);
-			boite(pp, buffer, jx, jy, jz, jx + 1f, jy + 1f, jz + 1f, ARGB.colorFromFloat(0.95f, 1.0f, 0.85f, 0.1f));
-			// Un poteau jaune au-dessus du coin 1, visible de loin.
-			boite(pp, buffer, jx + 0.35f, jy + 1f, jz + 0.35f, jx + 0.65f, jy + 6f, jz + 0.65f, ARGB.colorFromFloat(0.85f, 1.0f, 0.85f, 0.1f));
+			// Le coin 1 (point de reference) en jaune + un poteau, pour voir ou le batiment sera pose.
+			int jaune = ARGB.colorFromFloat(0.95f, 1.0f, 0.85f, 0.1f);
+			boite(pp, buffer, px, pz, cos, sin, -0.5f, -0.5f, 0.5f, 0.5f, py, py + 1f, jaune);
+			boite(pp, buffer, px, pz, cos, sin, -0.15f, -0.15f, 0.15f, 0.15f, py + 1f, py + 6f, jaune);
 		});
 
 		pose.popPose();
 	}
 
-	private static void boite(PoseStack.Pose pose, VertexConsumer v, float x0, float y0, float z0, float x1, float y1, float z1, int c) {
-		// Avant
-		v.addVertex(pose, x0, y0, z0).setColor(c);
-		v.addVertex(pose, x1, y0, z0).setColor(c);
-		v.addVertex(pose, x1, y1, z0).setColor(c);
-		v.addVertex(pose, x0, y1, z0).setColor(c);
-		// Arriere
-		v.addVertex(pose, x1, y0, z1).setColor(c);
-		v.addVertex(pose, x0, y0, z1).setColor(c);
-		v.addVertex(pose, x0, y1, z1).setColor(c);
-		v.addVertex(pose, x1, y1, z1).setColor(c);
-		// Gauche
-		v.addVertex(pose, x0, y0, z1).setColor(c);
-		v.addVertex(pose, x0, y0, z0).setColor(c);
-		v.addVertex(pose, x0, y1, z0).setColor(c);
-		v.addVertex(pose, x0, y1, z1).setColor(c);
-		// Droite
-		v.addVertex(pose, x1, y0, z0).setColor(c);
-		v.addVertex(pose, x1, y0, z1).setColor(c);
-		v.addVertex(pose, x1, y1, z1).setColor(c);
-		v.addVertex(pose, x1, y1, z0).setColor(c);
+	/** Une boite pleine, tournee autour du point (px, pz). (x0,z0)-(x1,z1) sont mesures a partir de ce point. */
+	private static void boite(PoseStack.Pose pose, VertexConsumer v, float px, float pz, float cos, float sin, float x0, float z0, float x1, float z1, float y0, float y1, int c) {
+		float ax = px + x0 * cos - z0 * sin;
+		float az = pz + x0 * sin + z0 * cos;
+		float bx2 = px + x1 * cos - z0 * sin;
+		float bz2 = pz + x1 * sin + z0 * cos;
+		float cx = px + x1 * cos - z1 * sin;
+		float cz = pz + x1 * sin + z1 * cos;
+		float dx = px + x0 * cos - z1 * sin;
+		float dz = pz + x0 * sin + z1 * cos;
+
+		// Avant (A-B)
+		v.addVertex(pose, ax, y0, az).setColor(c);
+		v.addVertex(pose, bx2, y0, bz2).setColor(c);
+		v.addVertex(pose, bx2, y1, bz2).setColor(c);
+		v.addVertex(pose, ax, y1, az).setColor(c);
+		// Arriere (C-D)
+		v.addVertex(pose, cx, y0, cz).setColor(c);
+		v.addVertex(pose, dx, y0, dz).setColor(c);
+		v.addVertex(pose, dx, y1, dz).setColor(c);
+		v.addVertex(pose, cx, y1, cz).setColor(c);
+		// Gauche (D-A)
+		v.addVertex(pose, dx, y0, dz).setColor(c);
+		v.addVertex(pose, ax, y0, az).setColor(c);
+		v.addVertex(pose, ax, y1, az).setColor(c);
+		v.addVertex(pose, dx, y1, dz).setColor(c);
+		// Droite (B-C)
+		v.addVertex(pose, bx2, y0, bz2).setColor(c);
+		v.addVertex(pose, cx, y0, cz).setColor(c);
+		v.addVertex(pose, cx, y1, cz).setColor(c);
+		v.addVertex(pose, bx2, y1, bz2).setColor(c);
 		// Haut
-		v.addVertex(pose, x0, y1, z0).setColor(c);
-		v.addVertex(pose, x1, y1, z0).setColor(c);
-		v.addVertex(pose, x1, y1, z1).setColor(c);
-		v.addVertex(pose, x0, y1, z1).setColor(c);
+		v.addVertex(pose, ax, y1, az).setColor(c);
+		v.addVertex(pose, bx2, y1, bz2).setColor(c);
+		v.addVertex(pose, cx, y1, cz).setColor(c);
+		v.addVertex(pose, dx, y1, dz).setColor(c);
 		// Bas
-		v.addVertex(pose, x0, y0, z1).setColor(c);
-		v.addVertex(pose, x1, y0, z1).setColor(c);
-		v.addVertex(pose, x1, y0, z0).setColor(c);
-		v.addVertex(pose, x0, y0, z0).setColor(c);
+		v.addVertex(pose, dx, y0, dz).setColor(c);
+		v.addVertex(pose, cx, y0, cz).setColor(c);
+		v.addVertex(pose, bx2, y0, bz2).setColor(c);
+		v.addVertex(pose, ax, y0, az).setColor(c);
 	}
 }

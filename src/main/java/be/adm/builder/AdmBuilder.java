@@ -1,5 +1,6 @@
 package be.adm.builder;
 
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -8,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
@@ -40,6 +42,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
@@ -173,7 +176,7 @@ public class AdmBuilder implements ModInitializer {
 				"--- ADM Builder ---\n"
 						+ "COPIER (hache en bois) : clic gauche = coin 1 (point de reference), clic droit = coin 2, puis /adm copier <nom>\n"
 						+ "COLLER (epee en bois) : le fantome bleu apparait, vise un endroit = le coin 1 se pose la.\n"
-						+ "   R = tourner - clic droit (ou Entree) = coller - clic gauche (ou X) = effacer le fantome\n"
+						+ "   R = tourner de 45 degres - clic droit (ou Entree) = coller - clic gauche (ou X) = effacer le fantome\n"
 						+ "   /adm coller <nom> = choisir un autre batiment sauvegarde, /adm liste = les voir\n"
 						+ "BLOQUER : /adm incassable (zone choisie), /adm cassable (enleve), /adm objet (objet en main)"), false);
 		return 1;
@@ -231,6 +234,8 @@ public class AdmBuilder implements ModInitializer {
 		int sz = size.getZ();
 		boolean[] plein = new boolean[sx * sy * sz];
 		int[] couleur = new int[sx * sy * sz];
+		int[] ids = new int[sx * sy * sz];
+		java.util.Arrays.fill(ids, -1);
 		BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
 
 		for (int x = 0; x < sx; x++) {
@@ -244,6 +249,7 @@ public class AdmBuilder implements ModInitializer {
 						int col = etat.getMapColor(level, p).col;
 						plein[i] = true;
 						couleur[i] = col == 0 ? 0xA0A0A0 : col;
+						ids[i] = Block.BLOCK_STATE_REGISTRY.getId(etat);
 					}
 				}
 			}
@@ -275,6 +281,21 @@ public class AdmBuilder implements ModInitializer {
 						}
 					}
 				}
+			}
+		}
+
+		// Tous les blocs (pour le collage en diagonale a 45 degres).
+		try (DataOutputStream out = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(dossier().resolve(nom + ".blocs"))))) {
+			out.writeInt(-2);
+			out.writeInt(sx);
+			out.writeInt(sy);
+			out.writeInt(sz);
+			out.writeInt(refX);
+			out.writeInt(refY);
+			out.writeInt(refZ);
+
+			for (int id : ids) {
+				out.writeInt(id);
 			}
 		}
 
@@ -336,27 +357,83 @@ public class AdmBuilder implements ModInitializer {
 		return 1;
 	}
 
-	/** Le joueur a appuye sur Entree : on colle pour de bon. */
-	private static void placer(ServerPlayer player, Payloads.Confirm c) {
-		if (!c.nom().matches("[A-Za-z0-9_.+-]+") || !Files.exists(dossier().resolve(c.nom() + ".nbt"))) {
-			return;
+	private record Entete(int sx, int sy, int sz, int refX, int refY, int refZ) {
+	}
+
+	/** Taille du batiment et position du coin 1 (point de reference), lus dans le fichier apercu. */
+	private static Entete lireEntete(String nom) {
+		Path f = dossier().resolve(nom + ".apercu");
+
+		if (!Files.exists(f)) {
+			return null;
 		}
 
-		Rotation rotation = switch (Math.floorMod(c.quarts(), 4)) {
+		try (DataInputStream in = new DataInputStream(new GZIPInputStream(Files.newInputStream(f)))) {
+			if (in.readInt() != -2) {
+				return null;
+			}
+
+			return new Entete(in.readInt(), in.readInt(), in.readInt(), in.readInt(), in.readInt(), in.readInt());
+		} catch (IOException e) {
+			return null;
+		}
+	}
+
+	// Rotation d'un point du batiment par quarts de tour (comme Minecraft), dans le cadre du batiment.
+	private static int tourneX(int q, int x, int z, int sx, int sz) {
+		return switch (q) {
+			case 1 -> (sz - 1) - z;
+			case 2 -> (sx - 1) - x;
+			case 3 -> z;
+			default -> x;
+		};
+	}
+
+	private static int tourneZ(int q, int x, int z, int sx, int sz) {
+		return switch (q) {
+			case 1 -> x;
+			case 2 -> (sz - 1) - z;
+			case 3 -> (sx - 1) - x;
+			default -> z;
+		};
+	}
+
+	private static Rotation rotationDe(int quarts) {
+		return switch (Math.floorMod(quarts, 4)) {
 			case 1 -> Rotation.CLOCKWISE_90;
 			case 2 -> Rotation.CLOCKWISE_180;
 			case 3 -> Rotation.COUNTERCLOCKWISE_90;
 			default -> Rotation.NONE;
 		};
+	}
+
+	/** Le joueur a clique avec l'epee : on colle pour de bon. x/y/z = la ou se pose le coin 1, quarts = nombre de pas de 45 degres. */
+	private static void placer(ServerPlayer player, Payloads.Confirm c) {
+		if (!c.nom().matches("[A-Za-z0-9_.+-]+") || !Files.exists(dossier().resolve(c.nom() + ".nbt"))) {
+			return;
+		}
+
+		int etapes = Math.floorMod(c.quarts(), 8);
+		Entete e = lireEntete(c.nom());
+		ServerLevel level = (ServerLevel) player.level();
+		BlockPos cible = new BlockPos(c.x(), c.y(), c.z());
+
+		if (etapes % 2 == 1) {
+			placerDiagonale(player, level, c.nom(), cible, etapes, e);
+			return;
+		}
+
+		int q = etapes / 2;
+		Rotation rotation = rotationDe(q);
 
 		try {
-			ServerLevel level = (ServerLevel) player.level();
 			StructureTemplate template = charger(level, c.nom());
 			StructurePlaceSettings settings = new StructurePlaceSettings().setRotation(rotation).setMirror(Mirror.NONE);
 
-			// On decale pour que le coin le plus bas du batiment tombe exactement la ou etait le fantome.
+			// Le coin le plus bas du batiment = la cible moins la position (tournee) du coin 1.
+			BlockPos min = e == null ? cible : new BlockPos(cible.getX() - tourneX(q, e.refX(), e.refZ(), e.sx(), e.sz()), cible.getY() - e.refY(), cible.getZ() - tourneZ(q, e.refX(), e.refZ(), e.sx(), e.sz()));
 			BoundingBox base = template.getBoundingBox(settings, BlockPos.ZERO);
-			BlockPos at = new BlockPos(c.x() - base.minX(), c.y() - base.minY(), c.z() - base.minZ());
+			BlockPos at = new BlockPos(min.getX() - base.minX(), min.getY() - base.minY(), min.getZ() - base.minZ());
 			template.placeInWorld(level, at, at, settings, level.getRandom(), 2);
 
 			// Le batiment colle devient la selection : /adm incassable le verrouille directement.
@@ -364,10 +441,122 @@ public class AdmBuilder implements ModInitializer {
 			Selection.setFirst(player.getUUID(), new BlockPos(box.minX(), box.minY(), box.minZ()));
 			Selection.setSecond(player.getUUID(), new BlockPos(box.maxX(), box.maxY(), box.maxZ()));
 			player.sendSystemMessage(Component.literal("Batiment '" + c.nom() + "' colle ! Tape /adm incassable pour le rendre incassable."));
-		} catch (IOException e) {
-			LOGGER.error("Erreur au collage", e);
-			player.sendSystemMessage(Component.literal("Erreur pendant le collage : " + e.getMessage()));
+		} catch (IOException ex) {
+			LOGGER.error("Erreur au collage", ex);
+			player.sendSystemMessage(Component.literal("Erreur pendant le collage : " + ex.getMessage()));
 		}
+	}
+
+	/** Collage a 45 degres (experimental) : chaque case de destination va chercher le bloc qui lui correspond dans le batiment d'origine. */
+	private static void placerDiagonale(ServerPlayer player, ServerLevel level, String nom, BlockPos cible, int etapes, Entete e) {
+		if (e == null || !Files.exists(dossier().resolve(nom + ".blocs"))) {
+			player.sendSystemMessage(Component.literal("Ce batiment a ete copie avec une ancienne version : recopie-le avec /adm copier pour pouvoir le tourner a 45 degres."));
+			return;
+		}
+
+		int sx = e.sx();
+		int sy = e.sy();
+		int sz = e.sz();
+		int[] ids = new int[sx * sy * sz];
+
+		try (DataInputStream in = new DataInputStream(new GZIPInputStream(Files.newInputStream(dossier().resolve(nom + ".blocs"))))) {
+			if (in.readInt() != -2) {
+				player.sendSystemMessage(Component.literal("Fichier du batiment illisible : recopie-le avec /adm copier."));
+				return;
+			}
+
+			for (int i = 0; i < 6; i++) {
+				in.readInt();
+			}
+
+			for (int i = 0; i < ids.length; i++) {
+				ids[i] = in.readInt();
+			}
+		} catch (IOException ex) {
+			LOGGER.error("Erreur a la lecture des blocs", ex);
+			player.sendSystemMessage(Component.literal("Erreur pendant la lecture : " + ex.getMessage()));
+			return;
+		}
+
+		double phi = etapes * Math.PI / 4.0;
+		double cos = Math.cos(phi);
+		double sin = Math.sin(phi);
+		Rotation rot = rotationDe((int) (Math.round(etapes / 2.0) % 4));
+
+		double rayonMax = 0;
+
+		for (double ax : new double[] {-e.refX() - 0.5, sx - e.refX() - 0.5}) {
+			for (double az : new double[] {-e.refZ() - 0.5, sz - e.refZ() - 0.5}) {
+				rayonMax = Math.max(rayonMax, Math.hypot(ax, az));
+			}
+		}
+
+		int rayon = (int) Math.ceil(rayonMax) + 1;
+		// On regarde le centre de la case, puis ses 4 coins : ca evite les trous dans les murs fins.
+		double[][] points = {{0, 0}, {0.45, 0.45}, {0.45, -0.45}, {-0.45, 0.45}, {-0.45, -0.45}};
+		BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
+		int[] colX = new int[points.length];
+		int[] colZ = new int[points.length];
+		int minX = Integer.MAX_VALUE;
+		int minY = Integer.MAX_VALUE;
+		int minZ = Integer.MAX_VALUE;
+		int maxX = Integer.MIN_VALUE;
+		int maxY = Integer.MIN_VALUE;
+		int maxZ = Integer.MIN_VALUE;
+		int posees = 0;
+
+		for (int dx = -rayon; dx <= rayon; dx++) {
+			for (int dz = -rayon; dz <= rayon; dz++) {
+				int n = 0;
+
+				for (double[] pt : points) {
+					double ox = dx + pt[0];
+					double oz = dz + pt[1];
+					int xs = e.refX() + (int) Math.round(ox * cos + oz * sin);
+					int zs = e.refZ() + (int) Math.round(-ox * sin + oz * cos);
+
+					if (xs >= 0 && xs < sx && zs >= 0 && zs < sz) {
+						colX[n] = xs;
+						colZ[n] = zs;
+						n++;
+					}
+				}
+
+				for (int y = 0; y < sy; y++) {
+					for (int k = 0; k < n; k++) {
+						int id = ids[(colX[k] * sy + y) * sz + colZ[k]];
+
+						if (id < 0) {
+							continue;
+						}
+
+						BlockState etat = Block.BLOCK_STATE_REGISTRY.byId(id);
+
+						if (etat == null) {
+							continue;
+						}
+
+						p.set(cible.getX() + dx, cible.getY() - e.refY() + y, cible.getZ() + dz);
+						level.setBlock(p, etat.rotate(rot), 2);
+						posees++;
+						minX = Math.min(minX, p.getX());
+						minY = Math.min(minY, p.getY());
+						minZ = Math.min(minZ, p.getZ());
+						maxX = Math.max(maxX, p.getX());
+						maxY = Math.max(maxY, p.getY());
+						maxZ = Math.max(maxZ, p.getZ());
+						break;
+					}
+				}
+			}
+		}
+
+		if (posees > 0) {
+			Selection.setFirst(player.getUUID(), new BlockPos(minX, minY, minZ));
+			Selection.setSecond(player.getUUID(), new BlockPos(maxX, maxY, maxZ));
+		}
+
+		player.sendSystemMessage(Component.literal("Batiment '" + nom + "' colle en diagonale (45 degres, experimental : les coffres, panneaux etc. ne sont pas gardes). Tape /adm incassable pour le verrouiller."));
 	}
 
 	private int zone(CommandContext<CommandSourceStack> ctx, boolean incassable) throws CommandSyntaxException {
