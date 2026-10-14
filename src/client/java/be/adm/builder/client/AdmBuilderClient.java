@@ -292,7 +292,10 @@ public class AdmBuilderClient implements ClientModInitializer {
 			}
 
 			// Un contour tres leger pour voir la taille totale.
-			boite(pp, buffer, cx, cy, cz, cx + l, cy + sy, cz + p, ARGB.colorFromFloat(0.12f, 0.2f, 0.7f, 1.0f));
+			boite(pp, buffer, cx, cy, cz, cx + l, cy + sy, cz + p, ARGB.colorFromFloat(0.18f, 0.2f, 0.7f, 1.0f));
+
+			// Le sol du batiment : une dalle cyan bien visible pour voir l'emplacement exact.
+			boite(pp, buffer, cx, cy, cz, cx + l, cy + 0.12f, cz + p, ARGB.colorFromFloat(0.60f, 0.0f, 0.9f, 1.0f));
 
 			for (int i = 0; i < bx.length; i++) {
 				int x = bx[i];
@@ -300,18 +303,20 @@ public class AdmBuilderClient implements ClientModInitializer {
 				int rgb = bc[i];
 				// Bleu fantome : la couleur du bloc d'origine ne sert qu'a garder un peu de relief.
 				float lum = (0.299f * ((rgb >> 16) & 255) + 0.587f * ((rgb >> 8) & 255) + 0.114f * (rgb & 255)) / 255f;
-				int couleur = ARGB.colorFromFloat(0.55f, 0.10f + 0.25f * lum, 0.35f + 0.35f * lum, 0.80f + 0.20f * lum);
+				int couleur = ARGB.colorFromFloat(0.80f, 0.15f + 0.25f * lum, 0.55f + 0.35f * lum, 1.0f);
 				float ox = cx + tourneX(x, z);
 				float oy = cy + by[i];
 				float oz = cz + tourneZ(x, z);
-				boite(pp, buffer, ox + 0.04f, oy + 0.04f, oz + 0.04f, ox + 0.96f, oy + 0.96f, oz + 0.96f, couleur);
+				boite(pp, buffer, ox + 0.01f, oy + 0.01f, oz + 0.01f, ox + 0.99f, oy + 0.99f, oz + 0.99f, couleur);
 			}
 
 			// Le coin 1 (point de reference) en jaune, pour voir ou le batiment sera pose.
 			float jx = cx + tourneX(refX, refZ);
 			float jy = cy + refY;
 			float jz = cz + tourneZ(refX, refZ);
-			boite(pp, buffer, jx, jy, jz, jx + 1f, jy + 1f, jz + 1f, ARGB.colorFromFloat(0.85f, 1.0f, 0.85f, 0.1f));
+			boite(pp, buffer, jx, jy, jz, jx + 1f, jy + 1f, jz + 1f, ARGB.colorFromFloat(0.95f, 1.0f, 0.85f, 0.1f));
+			// Un poteau jaune au-dessus du coin 1, visible de loin.
+			boite(pp, buffer, jx + 0.35f, jy + 1f, jz + 0.35f, jx + 0.65f, jy + 6f, jz + 0.65f, ARGB.colorFromFloat(0.85f, 1.0f, 0.85f, 0.1f));
 		});
 
 		pose.popPose();
