@@ -43,6 +43,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
@@ -434,6 +435,23 @@ public class AdmBuilder implements ModInitializer {
 			BlockPos min = e == null ? cible : new BlockPos(cible.getX() - tourneX(q, e.refX(), e.refZ(), e.sx(), e.sz()), cible.getY() - e.refY(), cible.getZ() - tourneZ(q, e.refX(), e.refZ(), e.sx(), e.sz()));
 			BoundingBox base = template.getBoundingBox(settings, BlockPos.ZERO);
 			BlockPos at = new BlockPos(min.getX() - base.minX(), min.getY() - base.minY(), min.getZ() - base.minZ());
+
+			// On remplace vraiment : tout ce qui etait dans la zone disparait avant le collage.
+			BoundingBox zone = template.getBoundingBox(settings, at);
+			BlockPos.MutableBlockPos c2 = new BlockPos.MutableBlockPos();
+
+			for (int x = zone.minX(); x <= zone.maxX(); x++) {
+				for (int y = zone.minY(); y <= zone.maxY(); y++) {
+					for (int z = zone.minZ(); z <= zone.maxZ(); z++) {
+						c2.set(x, y, z);
+
+						if (!level.getBlockState(c2).isAir()) {
+							level.setBlock(c2, Blocks.AIR.defaultBlockState(), 34);
+						}
+					}
+				}
+			}
+
 			template.placeInWorld(level, at, at, settings, level.getRandom(), 2);
 
 			// Le batiment colle devient la selection : /adm incassable le verrouille directement.
@@ -508,8 +526,10 @@ public class AdmBuilder implements ModInitializer {
 		for (int dx = -rayon; dx <= rayon; dx++) {
 			for (int dz = -rayon; dz <= rayon; dz++) {
 				int n = 0;
+				boolean centreDedans = false;
 
-				for (double[] pt : points) {
+				for (int j = 0; j < points.length; j++) {
+					double[] pt = points[j];
 					double ox = dx + pt[0];
 					double oz = dz + pt[1];
 					int xs = e.refX() + (int) Math.round(ox * cos + oz * sin);
@@ -519,34 +539,48 @@ public class AdmBuilder implements ModInitializer {
 						colX[n] = xs;
 						colZ[n] = zs;
 						n++;
+
+						if (j == 0) {
+							centreDedans = true;
+						}
 					}
 				}
 
 				for (int y = 0; y < sy; y++) {
-					for (int k = 0; k < n; k++) {
+					BlockState choisi = null;
+
+					for (int k = 0; k < n && choisi == null; k++) {
 						int id = ids[(colX[k] * sy + y) * sz + colZ[k]];
 
-						if (id < 0) {
-							continue;
+						if (id >= 0) {
+							BlockState etat = Block.BLOCK_STATE_REGISTRY.byId(id);
+
+							if (etat != null) {
+								choisi = etat.rotate(rot);
+							}
 						}
-
-						BlockState etat = Block.BLOCK_STATE_REGISTRY.byId(id);
-
-						if (etat == null) {
-							continue;
-						}
-
-						p.set(cible.getX() + dx, cible.getY() - e.refY() + y, cible.getZ() + dz);
-						level.setBlock(p, etat.rotate(rot), 2);
-						posees++;
-						minX = Math.min(minX, p.getX());
-						minY = Math.min(minY, p.getY());
-						minZ = Math.min(minZ, p.getZ());
-						maxX = Math.max(maxX, p.getX());
-						maxY = Math.max(maxY, p.getY());
-						maxZ = Math.max(maxZ, p.getZ());
-						break;
 					}
+
+					if (choisi == null && !centreDedans) {
+						continue;
+					}
+
+					p.set(cible.getX() + dx, cible.getY() - e.refY() + y, cible.getZ() + dz);
+
+					if (choisi != null) {
+						level.setBlock(p, choisi, 34);
+						posees++;
+					} else if (!level.getBlockState(p).isAir()) {
+						// Case vide du batiment : on enleve ce qui etait la avant (remplacement).
+						level.setBlock(p, Blocks.AIR.defaultBlockState(), 34);
+					}
+
+					minX = Math.min(minX, p.getX());
+					minY = Math.min(minY, p.getY());
+					minZ = Math.min(minZ, p.getZ());
+					maxX = Math.max(maxX, p.getX());
+					maxY = Math.max(maxY, p.getY());
+					maxZ = Math.max(maxZ, p.getZ());
 				}
 			}
 		}
