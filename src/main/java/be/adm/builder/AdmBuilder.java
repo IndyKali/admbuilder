@@ -35,6 +35,7 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Unit;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -85,8 +86,10 @@ public class AdmBuilder implements ModInitializer {
 			files.forEach(p -> {
 				String n = p.getFileName().toString();
 
-				if (n.endsWith(".nbt")) {
-					noms.add(n.substring(0, n.length() - 4));
+				String base = n.endsWith(".nbt") ? n.substring(0, n.length() - 4) : n.endsWith(".blocs") ? n.substring(0, n.length() - 6) : null;
+
+				if (base != null && !noms.contains(base)) {
+					noms.add(base);
 				}
 			});
 		} catch (IOException e) {
@@ -95,6 +98,11 @@ public class AdmBuilder implements ModInitializer {
 
 		Collections.sort(noms);
 		return noms;
+	}
+
+	/** Un batiment existe s'il a ete copie (.nbt) ou genere depuis un plan (.blocs). */
+	private static boolean existe(String nom) {
+		return Files.exists(dossier().resolve(nom + ".nbt")) || Files.exists(dossier().resolve(nom + ".blocs"));
 	}
 
 	private static String dim(Level level) {
@@ -158,6 +166,7 @@ public class AdmBuilder implements ModInitializer {
 
 		// 3) Les commandes.
 		SuggestionProvider<CommandSourceStack> suggestions = (ctx, builder) -> SharedSuggestionProvider.suggest(noms(), builder);
+		SuggestionProvider<CommandSourceStack> suggestionsPlans = (ctx, builder) -> SharedSuggestionProvider.suggest(PlanBuilder.noms(), builder);
 
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				literal("adm")
@@ -166,6 +175,7 @@ public class AdmBuilder implements ModInitializer {
 						.then(literal("liste").executes(this::liste))
 						.then(literal("copier").then(argument("nom", word()).executes(this::copier)))
 						.then(literal("coller").then(argument("nom", word()).suggests(suggestions).executes(this::apercu)))
+						.then(literal("plan").then(argument("nom", word()).suggests(suggestionsPlans).executes(this::plan)))
 						.then(literal("incassable").executes(ctx -> zone(ctx, true)))
 						.then(literal("cassable").executes(ctx -> zone(ctx, false)))
 						.then(literal("objet").executes(this::objet))));
@@ -179,6 +189,7 @@ public class AdmBuilder implements ModInitializer {
 						+ "COLLER (epee en bois) : le fantome bleu apparait, vise un endroit = le coin 1 se pose la.\n"
 						+ "   R = tourner de 45 degres - clic droit (ou Entree) = coller - clic gauche (ou X) = effacer le fantome\n"
 						+ "   /adm coller <nom> = choisir un autre batiment sauvegarde, /adm liste = les voir\n"
+						+ "PLAN : mets un fichier .json dans .minecraft/adm_plans, puis /adm plan <nom> : le batiment apparait en fantome bleu, pose-le avec l'epee (2 laines au sol marquent les coins)\n"
 						+ "BLOQUER : /adm incassable (zone choisie), /adm cassable (enleve), /adm objet (objet en main)"), false);
 		return 1;
 	}
@@ -200,6 +211,18 @@ public class AdmBuilder implements ModInitializer {
 
 		BlockPos min = Selection.min(player.getUUID());
 		BlockPos max = Selection.max(player.getUUID());
+		BlockPos[] coins = Selection.get(player.getUUID());
+
+		// Deux laines au sol (comme celles d'un batiment genere par /adm plan) : on prend toute la hauteur du batiment.
+		if (coins[0].getY() == coins[1].getY()
+				&& src.getLevel().getBlockState(coins[0]).is(BlockTags.WOOL)
+				&& src.getLevel().getBlockState(coins[1]).is(BlockTags.WOOL)) {
+			int haut = hauteurAuto(src.getLevel(), min, max);
+			max = new BlockPos(max.getX(), haut, max.getZ());
+			int hauteur = haut - min.getY() + 1;
+			src.sendSuccess(() -> Component.literal("Deux laines au sol : hauteur prise automatiquement (" + hauteur + " blocs)."), false);
+		}
+
 		Vec3i size = new Vec3i(max.getX() - min.getX() + 1, max.getY() - min.getY() + 1, max.getZ() - min.getZ() + 1);
 		long total = (long) size.getX() * size.getY() * size.getZ();
 
@@ -226,6 +249,27 @@ public class AdmBuilder implements ModInitializer {
 
 		src.sendSuccess(() -> Component.literal("Batiment '" + nom + "' sauvegarde (" + size.getX() + "x" + size.getY() + "x" + size.getZ() + "). Prends l'epee en bois pour voir le fantome. Dans une autre map : /adm coller " + nom), false);
 		return 1;
+	}
+
+	/** Le bloc non vide le plus haut au-dessus de la zone choisie (la zone s'etend de min.y jusqu'a la). */
+	private static int hauteurAuto(ServerLevel level, BlockPos min, BlockPos max) {
+		int haut = min.getY();
+		BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
+
+		for (int x = min.getX(); x <= max.getX(); x++) {
+			for (int z = min.getZ(); z <= max.getZ(); z++) {
+				for (int y = level.getMaxY(); y > haut; y--) {
+					p.set(x, y, z);
+
+					if (!level.getBlockState(p).isAir()) {
+						haut = y;
+						break;
+					}
+				}
+			}
+		}
+
+		return haut;
 	}
 
 	/** Fichier "apercu" : la liste des blocs visibles du batiment avec leur couleur, pour le fantome. */
@@ -341,13 +385,27 @@ public class AdmBuilder implements ModInitializer {
 		ServerPlayer player = src.getPlayerOrException();
 		String nom = getString(ctx, "nom");
 
-		if (!Files.exists(dossier().resolve(nom + ".nbt"))) {
+		if (!existe(nom)) {
 			src.sendFailure(Component.literal("Je ne trouve pas le batiment '" + nom + "'. Tape /adm liste pour voir les noms."));
 			return 0;
 		}
 
 		try {
-			Vec3i size = charger(src.getLevel(), nom).getSize();
+			Vec3i size;
+
+			if (Files.exists(dossier().resolve(nom + ".nbt"))) {
+				size = charger(src.getLevel(), nom).getSize();
+			} else {
+				Entete e = lireEntete(nom);
+
+				if (e == null) {
+					src.sendFailure(Component.literal("Fichier du batiment illisible : regenere-le avec /adm plan."));
+					return 0;
+				}
+
+				size = new Vec3i(e.sx(), e.sy(), e.sz());
+			}
+
 			ServerPlayNetworking.send(player, new Payloads.Preview(nom, size.getX(), size.getY(), size.getZ()));
 		} catch (IOException e) {
 			LOGGER.error("Erreur a la lecture", e);
@@ -410,7 +468,7 @@ public class AdmBuilder implements ModInitializer {
 
 	/** Le joueur a clique avec l'epee : on colle pour de bon. x/y/z = la ou se pose le coin 1, quarts = nombre de pas de 45 degres. */
 	private static void placer(ServerPlayer player, Payloads.Confirm c) {
-		if (!c.nom().matches("[A-Za-z0-9_.+-]+") || !Files.exists(dossier().resolve(c.nom() + ".nbt"))) {
+		if (!c.nom().matches("[A-Za-z0-9_.+-]+") || !existe(c.nom())) {
 			return;
 		}
 
@@ -419,7 +477,7 @@ public class AdmBuilder implements ModInitializer {
 		ServerLevel level = (ServerLevel) player.level();
 		BlockPos cible = new BlockPos(c.x(), c.y(), c.z());
 
-		if (etapes % 2 == 1) {
+		if (etapes % 2 == 1 || !Files.exists(dossier().resolve(c.nom() + ".nbt"))) {
 			placerDiagonale(player, level, c.nom(), cible, etapes, e);
 			return;
 		}
@@ -590,7 +648,37 @@ public class AdmBuilder implements ModInitializer {
 			Selection.setSecond(player.getUUID(), new BlockPos(maxX, maxY, maxZ));
 		}
 
-		player.sendSystemMessage(Component.literal("Batiment '" + nom + "' colle en diagonale (45 degres, experimental : les coffres, panneaux etc. ne sont pas gardes). Tape /adm incassable pour le verrouiller."));
+		if (etapes % 2 == 1) {
+			player.sendSystemMessage(Component.literal("Batiment '" + nom + "' colle en diagonale (45 degres, experimental : les coffres, panneaux etc. ne sont pas gardes). Tape /adm incassable pour le verrouiller."));
+		} else {
+			player.sendSystemMessage(Component.literal("Batiment '" + nom + "' colle ! Tape /adm incassable pour le rendre incassable."));
+		}
+	}
+
+	/** /adm plan nom : lit adm_plans/nom.json, fabrique le batiment et affiche son fantome. */
+	private int plan(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+		CommandSourceStack src = ctx.getSource();
+		ServerPlayer player = src.getPlayerOrException();
+		String nom = getString(ctx, "nom");
+
+		if (!nom.matches("[A-Za-z0-9_.+-]+")) {
+			src.sendFailure(Component.literal("Nom de plan invalide (lettres, chiffres, _ - . + seulement)."));
+			return 0;
+		}
+
+		try {
+			Plan.Grille g = PlanBuilder.construire(src.getLevel(), dossier(), nom);
+			ServerPlayNetworking.send(player, new Payloads.Preview(nom, g.sx, g.sy, g.sz));
+			src.sendSuccess(() -> Component.literal("Plan '" + nom + "' pret : " + g.sx + " x " + g.sy + " x " + g.sz + " blocs (" + g.blocs + " blocs poses). Prends l'epee en bois : le fantome bleu apparait, vise le sol (la laine rouge se pose la), R = tourner, clic droit = coller."), false);
+			return 1;
+		} catch (Plan.PlanException e) {
+			src.sendFailure(Component.literal("Plan '" + nom + "' : " + e.getMessage()));
+			return 0;
+		} catch (IOException e) {
+			LOGGER.error("Erreur a la lecture du plan", e);
+			src.sendFailure(Component.literal("Erreur pendant la lecture du plan : " + e.getMessage()));
+			return 0;
+		}
 	}
 
 	private int zone(CommandContext<CommandSourceStack> ctx, boolean incassable) throws CommandSyntaxException {
