@@ -1,0 +1,32 @@
+{
+  "nom": "Hotel de Ville de Bruxelles (exemple a affiner)",
+  "materiaux": {
+    "mur": "minecraft:sandstone",
+    "deco": "minecraft:cut_sandstone",
+    "toit": "minecraft:deepslate_tiles",
+    "vitre": "minecraft:glass_pane"
+  },
+  "formes": [
+    { "type": "boite", "x": 0, "y": 0, "z": 0, "largeur": 80, "hauteur": 24, "profondeur": 30, "materiau": "mur", "creux": true, "epaisseur": 2 },
+
+    { "type": "boite", "x": 0, "y": 24, "z": 0, "largeur": 80, "hauteur": 1, "profondeur": 30, "materiau": "deco" },
+    { "type": "toit_pente", "x": 0, "y": 25, "z": 0, "largeur": 80, "profondeur": 30, "hauteur": 14, "axe": "x", "materiau": "toit" },
+
+    { "type": "boite", "x": 3, "y": 6, "z": 0, "largeur": 1, "hauteur": 3, "profondeur": 1, "materiau": "vitre",
+      "repeter": [ { "nombre": 24, "dx": 3 }, { "nombre": 4, "dy": 5 } ] },
+
+    { "type": "boite", "x": 2, "y": 0, "z": 0, "largeur": 3, "hauteur": 4, "profondeur": 2, "op": "retirer",
+      "repeter": [ { "nombre": 16, "dx": 5 } ] },
+
+    { "type": "boite", "x": 38, "y": 0, "z": 8, "largeur": 13, "hauteur": 46, "profondeur": 13, "materiau": "mur", "creux": true, "epaisseur": 2 },
+    { "type": "boite", "x": 40, "y": 46, "z": 10, "largeur": 9, "hauteur": 14, "profondeur": 9, "materiau": "mur", "creux": true, "epaisseur": 1 },
+    { "type": "boite", "x": 41, "y": 60, "z": 11, "largeur": 7, "hauteur": 12, "profondeur": 7, "materiau": "mur", "creux": true, "epaisseur": 1 },
+    { "type": "pyramide", "x": 41, "y": 72, "z": 11, "largeur": 7, "profondeur": 7, "hauteur": 24, "materiau": "deco" },
+
+    { "type": "cylindre", "x": 2, "y": 0, "z": 2, "rayon": 2, "hauteur": 34, "materiau": "mur" },
+    { "type": "cone", "x": 2, "y": 34, "z": 2, "rayon": 3, "hauteur": 9, "materiau": "toit" },
+    { "type": "cylindre", "x": 77, "y": 0, "z": 2, "rayon": 2, "hauteur": 34, "materiau": "mur" },
+    { "type": "cone", "x": 77, "y": 34, "z": 2, "rayon": 3, "hauteur": 9, "materiau": "toit" }
+  ],
+  "marqueurs_laine": true
+}
