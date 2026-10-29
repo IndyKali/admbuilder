@@ -1,5 +1,29 @@
-ADM Builder - mod Fabric pour Minecraft 26.2
+ADM Builder - mod Fabric pour Minecraft 26.3
 
 Commandes en jeu : /adm aide
 Hache en bois : clic gauche = coin 1, clic droit = coin 2.
 Les batiments sauvegardes sont dans .minecraft/adm_batiments (communs a toutes les maps).
+
+=== PLANS : construire un batiment a partir d'un fichier ===
+1. Mets un fichier  nom.json  dans  .minecraft/adm_plans
+2. En jeu : /adm plan nom
+3. Prends l'epee en bois : le fantome bleu apparait. Vise le sol (la laine ROUGE se pose a cet endroit),
+   R = tourner, clic droit = coller.
+4. Deux laines sont posees au niveau du sol, aux coins opposes (rouge = coin 1, bleue = coin 2).
+   Pour recopier le batiment plus tard : hache sur la laine rouge (clic gauche), hache sur la laine bleue (clic droit),
+   puis /adm copier nom2 -> la hauteur est prise automatiquement.
+
+Format du plan (1 bloc = 1 metre, x = est, y = haut, z = sud, le batiment est recale tout seul) :
+  "materiaux" : noms courts -> blocs, ex. { "mur": "minecraft:sandstone" }
+  "formes"    : liste, posee dans l'ordre. Chaque forme a "type" et "materiau" :
+     boite      x,y,z (coin bas), largeur (x), hauteur (y), profondeur (z), creux:true, epaisseur
+     cylindre   x,y,z (centre du bas), rayon, hauteur, creux, epaisseur
+     sphere     x,y,z (centre), rayon, creux, epaisseur
+     cone       x,y,z (centre du bas), rayon, hauteur
+     pyramide   x,y,z (coin bas), largeur, profondeur, hauteur
+     toit_pente x,y,z (coin bas), largeur, profondeur, hauteur, axe ("x" ou "z" = direction du faite)
+     arc        cx,cz (centre), y, rayon_int, rayon_ext, angle_debut, angle_fin (degres, 0 = est, 90 = sud), hauteur
+  "op": "retirer"  creuse au lieu de poser (fenetres, arcades, portes)
+  "repeter": [ {"nombre":24,"dx":3}, {"nombre":4,"dy":5} ]  repete la forme (colonnes, rangees de fenetres...)
+  "marqueurs_laine": false  pour ne pas poser les deux laines
+Exemple complet : exemples/hotel_de_ville.json
