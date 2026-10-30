@@ -21,7 +21,6 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -76,8 +75,8 @@ public final class PlanBuilder {
 
 		try {
 			JsonObject racine = JsonParser.parseString(Files.readString(fichier)).getAsJsonObject();
-			int rouge = Block.BLOCK_STATE_REGISTRY.getId(Blocks.RED_WOOL.defaultBlockState());
-			int bleu = Block.BLOCK_STATE_REGISTRY.getId(Blocks.BLUE_WOOL.defaultBlockState());
+			int rouge = idDuBloc("minecraft:red_wool");
+			int bleu = idDuBloc("minecraft:blue_wool");
 			g = Plan.generer(racine, PlanBuilder::idDuBloc, rouge, bleu);
 		} catch (Plan.PlanException e) {
 			throw e;
