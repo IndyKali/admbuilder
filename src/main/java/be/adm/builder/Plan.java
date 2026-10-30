@@ -41,7 +41,7 @@ public final class Plan {
 	}
 
 	private interface Cellule {
-		void accepter(int x, int y, int z);
+		void accepter(int x, int y, int z, boolean alt);
 	}
 
 	private record Forme(int num, String type, JsonObject o, int ox, int oy, int oz, boolean retirer) {
@@ -68,7 +68,7 @@ public final class Plan {
 				continue;
 			}
 
-			cellules(f, (x, y, z) -> {
+			cellules(f, (x, y, z, alt) -> {
 				b[0] = Math.min(b[0], x);
 				b[1] = Math.min(b[1], y);
 				b[2] = Math.min(b[2], z);
@@ -104,15 +104,16 @@ public final class Plan {
 		final int decZ = marge - b[2];
 
 		for (Forme f : formes) {
-			final int id = f.retirer() ? -1 : resoudre(f, materiaux, resolveur);
+			final int id = f.retirer() ? -1 : resoudre(f, "materiau", materiaux, resolveur, true);
+			final int id2 = f.retirer() ? -1 : (f.o().has("materiau2") ? resoudre(f, "materiau2", materiaux, resolveur, true) : id);
 
-			cellules(f, (x, y, z) -> {
+			cellules(f, (x, y, z, alt) -> {
 				int gx = x + decX;
 				int gy = y + decY;
 				int gz = z + decZ;
 
 				if (gx >= 0 && gx < g.sx && gy >= 0 && gy < g.sy && gz >= 0 && gz < g.sz) {
-					g.ids[(gx * g.sy + gy) * g.sz + gz] = id;
+					g.ids[(gx * g.sy + gy) * g.sz + gz] = alt ? id2 : id;
 				}
 			});
 		}
@@ -137,12 +138,12 @@ public final class Plan {
 
 	// ---------------------------------------------------------------- lecture du plan
 
-	private static int resoudre(Forme f, JsonObject materiaux, Resolveur resolveur) throws PlanException {
-		if (!f.o().has("materiau")) {
-			throw erreur(f, "il manque le champ \"materiau\".");
+	private static int resoudre(Forme f, String cle, JsonObject materiaux, Resolveur resolveur, boolean requis) throws PlanException {
+		if (!f.o().has(cle)) {
+			throw erreur(f, "il manque le champ \"" + cle + "\".");
 		}
 
-		String nom = f.o().get("materiau").getAsString();
+		String nom = f.o().get(cle).getAsString();
 
 		if (materiaux.has(nom)) {
 			nom = materiaux.get(nom).getAsString();
@@ -229,6 +230,18 @@ public final class Plan {
 		return f.o().has(cle) ? (int) Math.round(f.o().get(cle).getAsDouble()) : defaut;
 	}
 
+	private static double nombre(Forme f, String cle) throws PlanException {
+		if (!f.o().has(cle)) {
+			throw erreur(f, "il manque le champ \"" + cle + "\".");
+		}
+
+		return f.o().get(cle).getAsDouble();
+	}
+
+	private static String texte(Forme f, String cle, String defaut) {
+		return f.o().has(cle) ? f.o().get(cle).getAsString() : defaut;
+	}
+
 	private static boolean vrai(Forme f, String cle) {
 		return f.o().has(cle) && f.o().get(cle).getAsBoolean();
 	}
@@ -244,7 +257,11 @@ public final class Plan {
 			case "pyramide" -> pyramide(f, c);
 			case "toit_pente" -> toitPente(f, c);
 			case "arc" -> arc(f, c);
-			default -> throw erreur(f, "forme inconnue. Formes possibles : boite, cylindre, sphere, cone, pyramide, toit_pente, arc.");
+			case "voute" -> voute(f, c);
+			case "arche" -> arche(f, c);
+			case "disque" -> disque(f, c);
+			case "escalier" -> escalier(f, c);
+			default -> throw erreur(f, "forme inconnue. Formes possibles : boite, cylindre, sphere, cone, pyramide, toit_pente, arc, voute, arche, disque, escalier.");
 		}
 	}
 
@@ -269,54 +286,74 @@ public final class Plan {
 						}
 					}
 
-					c.accepter(x + i, y + j, z + k);
+					c.accepter(x + i, y + j, z + k, false);
 				}
 			}
 		}
 	}
 
+	/** x et z peuvent etre decimaux (ex. 10.5 = colonne de 2 blocs de large). "materiau2" = cannelures sur le pourtour. */
 	private static void cylindre(Forme f, Cellule c) throws PlanException {
-		int x = entier(f, "x") + f.ox();
+		double cx = nombre(f, "x") + f.ox();
+		double cz = nombre(f, "z") + f.oz();
 		int y = entier(f, "y") + f.oy();
-		int z = entier(f, "z") + f.oz();
-		int r = entier(f, "rayon");
+		double r = nombre(f, "rayon");
 		int h = entier(f, "hauteur");
 		boolean creux = vrai(f, "creux");
 		int ep = entier(f, "epaisseur", 1);
+		boolean cannele = f.o().has("materiau2");
+		int x0 = (int) Math.floor(cx - r - 1);
+		int x1 = (int) Math.ceil(cx + r + 1);
+		int z0 = (int) Math.floor(cz - r - 1);
+		int z1 = (int) Math.ceil(cz + r + 1);
 
-		for (int i = -r; i <= r; i++) {
-			for (int k = -r; k <= r; k++) {
-				double d = Math.sqrt(i * i + k * k);
+		for (int i = x0; i <= x1; i++) {
+			for (int k = z0; k <= z1; k++) {
+				double d = Math.hypot(i - cx, k - cz);
 
 				if (d > r + 0.35 || (creux && d <= r - ep + 0.35)) {
 					continue;
 				}
 
+				boolean alt = cannele && d > r - 0.7 && ((i + k) & 1) == 0;
+
 				for (int j = 0; j < h; j++) {
-					c.accepter(x + i, y + j, z + k);
+					c.accepter(i, y + j, k, alt);
 				}
 			}
 		}
 	}
 
+	/** x, y, z et rayon peuvent etre decimaux. "moitie":"haut" = dome. */
 	private static void sphere(Forme f, Cellule c) throws PlanException {
-		int x = entier(f, "x") + f.ox();
-		int y = entier(f, "y") + f.oy();
-		int z = entier(f, "z") + f.oz();
-		int r = entier(f, "rayon");
+		double cx = nombre(f, "x") + f.ox();
+		double cy = nombre(f, "y") + f.oy();
+		double cz = nombre(f, "z") + f.oz();
+		double r = nombre(f, "rayon");
 		boolean creux = vrai(f, "creux");
 		int ep = entier(f, "epaisseur", 1);
+		boolean moitieHaute = texte(f, "moitie", "").equals("haut");
+		int x0 = (int) Math.floor(cx - r - 1);
+		int x1 = (int) Math.ceil(cx + r + 1);
+		int y0 = (int) Math.floor(cy - r - 1);
+		int y1 = (int) Math.ceil(cy + r + 1);
+		int z0 = (int) Math.floor(cz - r - 1);
+		int z1 = (int) Math.ceil(cz + r + 1);
 
-		for (int i = -r; i <= r; i++) {
-			for (int j = -r; j <= r; j++) {
-				for (int k = -r; k <= r; k++) {
-					double d = Math.sqrt(i * i + j * j + k * k);
+		for (int i = x0; i <= x1; i++) {
+			for (int j = y0; j <= y1; j++) {
+				if (moitieHaute && j < cy) {
+					continue;
+				}
+
+				for (int k = z0; k <= z1; k++) {
+					double d = Math.sqrt((i - cx) * (i - cx) + (j - cy) * (j - cy) + (k - cz) * (k - cz));
 
 					if (d > r + 0.35 || (creux && d <= r - ep + 0.35)) {
 						continue;
 					}
 
-					c.accepter(x + i, y + j, z + k);
+					c.accepter(i, j, k, false);
 				}
 			}
 		}
@@ -335,7 +372,7 @@ public final class Plan {
 			for (int i = -r; i <= r; i++) {
 				for (int k = -r; k <= r; k++) {
 					if (Math.sqrt(i * i + k * k) <= rj + 0.35) {
-						c.accepter(x + i, y + j, z + k);
+						c.accepter(x + i, y + j, z + k, false);
 					}
 				}
 			}
@@ -360,7 +397,7 @@ public final class Plan {
 			for (int i = 0; i < lx; i++) {
 				for (int k = 0; k < lz; k++) {
 					if (Math.abs(i - cx) < hx && Math.abs(k - cz) < hz) {
-						c.accepter(x + i, y + j, z + k);
+						c.accepter(x + i, y + j, z + k, false);
 					}
 				}
 			}
@@ -378,6 +415,7 @@ public final class Plan {
 		boolean faiteSurX = !f.o().has("axe") || f.o().get("axe").getAsString().equals("x");
 		int longueur = faiteSurX ? lx : lz;
 		int travers = faiteSurX ? lz : lx;
+		boolean creux = vrai(f, "creux");
 
 		for (int j = 0; j < h; j++) {
 			int recul = (int) Math.floor(j * (travers / 2.0) / h);
@@ -388,12 +426,25 @@ public final class Plan {
 				break;
 			}
 
+			int aSuite = b + 1;
+			int bSuite = a - 1;
+
+			if (j + 1 < h) {
+				int rs = (int) Math.floor((j + 1) * (travers / 2.0) / h);
+				aSuite = rs;
+				bSuite = travers - 1 - rs;
+			}
+
 			for (int l = 0; l < longueur; l++) {
 				for (int t = a; t <= b; t++) {
+					if (creux && t > aSuite && t < bSuite) {
+						continue;
+					}
+
 					if (faiteSurX) {
-						c.accepter(x + l, y + j, z + t);
+						c.accepter(x + l, y + j, z + t, false);
 					} else {
-						c.accepter(x + t, y + j, z + l);
+						c.accepter(x + t, y + j, z + l, false);
 					}
 				}
 			}
@@ -430,7 +481,138 @@ public final class Plan {
 				}
 
 				for (int j = 0; j < h; j++) {
-					c.accepter(cx + i, y + j, cz + k);
+					c.accepter(cx + i, y + j, cz + k, false);
+				}
+			}
+		}
+	}
+
+	/** Voute en berceau (demi-cylindre ou demi-ellipse) : largeur = ouverture, profondeur = longueur, hauteur facultative. */
+	private static void voute(Forme f, Cellule c) throws PlanException {
+		int x = entier(f, "x") + f.ox();
+		int y = entier(f, "y") + f.oy();
+		int z = entier(f, "z") + f.oz();
+		int larg = entier(f, "largeur");
+		int lon = entier(f, "profondeur");
+		boolean sur_z = !f.o().has("axe") || f.o().get("axe").getAsString().equals("z");
+		double a = larg / 2.0;
+		double hh = f.o().has("hauteur") ? f.o().get("hauteur").getAsDouble() : a;
+		boolean creux = vrai(f, "creux");
+		int ep = entier(f, "epaisseur", 1);
+
+		for (int u = 0; u < larg; u++) {
+			double dx = u - (larg - 1) / 2.0;
+
+			for (int j = 0; j < (int) Math.ceil(hh); j++) {
+				double e = Math.pow(dx / a, 2) + Math.pow((j + 0.5) / hh, 2);
+
+				if (e > 1.0) {
+					continue;
+				}
+
+				if (creux) {
+					double a2 = a - ep;
+					double b2 = hh - ep;
+
+					if (a2 > 0 && b2 > 0 && Math.pow(dx / a2, 2) + Math.pow((j + 0.5) / b2, 2) <= 1.0) {
+						continue;
+					}
+				}
+
+				for (int l = 0; l < lon; l++) {
+					if (sur_z) {
+						c.accepter(x + u, y + j, z + l, false);
+					} else {
+						c.accepter(x + l, y + j, z + u, false);
+					}
+				}
+			}
+		}
+	}
+
+	/** Ouverture ou fenetre en arc (rectangle + demi-cercle en haut). plan "xy" : largeur sur x, epaisseur sur z ; plan "zy" : largeur sur z, epaisseur sur x. */
+	private static void arche(Forme f, Cellule c) throws PlanException {
+		int x = entier(f, "x") + f.ox();
+		int y = entier(f, "y") + f.oy();
+		int z = entier(f, "z") + f.oz();
+		int larg = entier(f, "largeur");
+		int haut = entier(f, "hauteur");
+		int ep = entier(f, "profondeur");
+		boolean planXY = !f.o().has("plan") || f.o().get("plan").getAsString().equals("xy");
+		double r = larg / 2.0;
+
+		for (int u = 0; u < larg; u++) {
+			for (int j = 0; j < haut; j++) {
+				double yy = j + 0.5;
+
+				if (yy > haut - r) {
+					double dy = yy - (haut - r);
+					double dx = u + 0.5 - r;
+
+					if (dx * dx + dy * dy > r * r) {
+						continue;
+					}
+				}
+
+				for (int d = 0; d < ep; d++) {
+					if (planXY) {
+						c.accepter(x + u, y + j, z + d, false);
+					} else {
+						c.accepter(x + d, y + j, z + u, false);
+					}
+				}
+			}
+		}
+	}
+
+	/** Disque dans un plan vertical (fenetre ronde, oculus). x,y,z = centre ; "profondeur" = epaisseur. */
+	private static void disque(Forme f, Cellule c) throws PlanException {
+		int x = entier(f, "x") + f.ox();
+		int y = entier(f, "y") + f.oy();
+		int z = entier(f, "z") + f.oz();
+		int r = entier(f, "rayon");
+		int ep = entier(f, "profondeur", 1);
+		boolean planXY = !f.o().has("plan") || f.o().get("plan").getAsString().equals("xy");
+
+		for (int u = -r; u <= r; u++) {
+			for (int j = -r; j <= r; j++) {
+				if (Math.sqrt(u * u + j * j) > r + 0.35) {
+					continue;
+				}
+
+				for (int d = 0; d < ep; d++) {
+					if (planXY) {
+						c.accepter(x + u, y + j, z + d, false);
+					} else {
+						c.accepter(x + d, y + j, z + u, false);
+					}
+				}
+			}
+		}
+	}
+
+	/** Grand escalier en demi-marches : blocs pleins ("materiau") + dalles ("materiau2", un bloc de type slab). Monte vers +z (ou -z avec "sens":"-z"). */
+	private static void escalier(Forme f, Cellule c) throws PlanException {
+		int x = entier(f, "x") + f.ox();
+		int y = entier(f, "y") + f.oy();
+		int z = entier(f, "z") + f.oz();
+		int larg = entier(f, "largeur");
+		int haut = entier(f, "hauteur");
+		int lon = entier(f, "profondeur");
+		boolean vers_moins = texte(f, "sens", "+z").equals("-z");
+
+		for (int k = 0; k < lon; k++) {
+			int pas = vers_moins ? lon - 1 - k : k;
+			int demi = (int) Math.floor(2.0 * haut * (pas + 1) / lon);
+			int pleins = demi / 2;
+
+			for (int i = 0; i < larg; i++) {
+				for (int j = 0; j < pleins; j++) {
+					c.accepter(x + i, y + j, z + k, false);
+				}
+
+				if (demi % 2 == 1) {
+					c.accepter(x + i, y + pleins, z + k, true);
 				}
 			}
 		}
